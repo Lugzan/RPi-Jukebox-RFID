@@ -151,7 +151,8 @@ def query_user_for_reader(dependency_install='query') -> dict:
     package_dir = os.path.abspath(os.path.dirname(os.path.realpath(__file__)) + '/../hardware')
     logger.debug(f"Package location: {package_dir}")
     # For known included readers, specify manual order
-    included_readers = [NO_RFID_READER, 'generic_usb', 'rdm6300_serial', 'rc522_spi', 'pn532_i2c_py532', 'fake_reader_gui']
+    included_readers = [NO_RFID_READER, 'generic_usb', 'rdm6300_serial', 'rc522_spi', 'pn532_i2c_py532', 'pn532_uart',
+                        'fake_reader_gui']
     # Get all local directories (i.e subpackages) that conform to naming/structuring convention (except known readers)
     # Naming convention: modname/modname.py
     additional_readers = [x for x in os.listdir(package_dir)

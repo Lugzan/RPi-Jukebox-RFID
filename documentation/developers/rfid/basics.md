@@ -26,7 +26,7 @@ when a card is placed and to pause it when it's removed.
 
 Generally, **not** all [USB-based RFID readers](genericusb.md) are place-capable.
 
-The known place-capable readers are [RDM6300 Reader](rdm6300.md), [MFRC522 SPI Reader](mfrc522_spi.md) or [PN532 I2C Reader](pn532_i2c.md).
+The known place-capable readers are [RDM6300 Reader](rdm6300.md), [MFRC522 SPI Reader](mfrc522_spi.md), [PN532 I2C Reader](pn532_i2c.md), or [PN532 USB/UART Reader](pn532_uart.md).
 
 ### Frequency
 

@@ -1,0 +1,2 @@
+# PN532 HSU/UART support, including the nfcpy PN532 driver.
+nfcpy
