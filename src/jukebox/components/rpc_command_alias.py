@@ -49,17 +49,17 @@ cmd_alias_definitions = {
         'note': "This is what you want as card removal action for place capable readers",
         'ignore_card_removal_action': True},
     'next_song': {
-        'package': 'player',
+        'package': 'media',
         'plugin': 'ctrl',
         'method': 'next',
         'ignore_card_removal_action': True},
     'prev_song': {
-        'package': 'player',
+        'package': 'media',
         'plugin': 'ctrl',
         'method': 'prev',
         'ignore_card_removal_action': True},
     'toggle': {
-        'package': 'player',
+        'package': 'media',
         'plugin': 'ctrl',
         'method': 'toggle',
         'ignore_card_removal_action': True},
