@@ -1,0 +1,72 @@
+# Five active-high TTP223B capacitive media controls.
+#
+# TTP223B OUT is LOW while idle and HIGH while touched. `pull_up: false`
+# therefore enables the Raspberry Pi's internal pull-down for every input.
+# Copy this file to shared/settings/gpio.yaml and set `gpioz.enable: true` in
+# shared/settings/jukebox.yaml to activate it.
+#
+# GPIO10 and GPIO11 are SPI MOSI/SCLK. Do not use this recipe together with
+# an SPI RFID reader (for example RC522) wired to those default SPI pins.
+pin_factory:
+  type: rpigpio.RPiGPIOFactory
+
+input_devices:
+  Volume:
+    # A TwinButton reserves both pins so it can distinguish their chord.
+    # Short touches change volume on release. A sustained single touch begins
+    # changing volume after hold_time and repeats every hold_time seconds.
+    type: TwinButton
+    kwargs:
+      a: 5
+      b: 6
+      pull_up: false
+      bounce_time: 0.05
+      hold_time: 0.4
+      hold_repeat: true
+    actions:
+      on_short_press_a:
+        alias: change_volume
+        args: -5
+      on_short_press_b:
+        alias: change_volume
+        args: 5
+      on_short_press_ab:
+        package: volume
+        plugin: ctrl
+        method: mute
+      on_long_press_a:
+        alias: change_volume
+        args: -5
+      on_long_press_b:
+        alias: change_volume
+        args: 5
+
+  Previous:
+    type: Button
+    kwargs:
+      pin: 25
+      pull_up: false
+      bounce_time: 0.05
+    actions:
+      on_press:
+        alias: prev_song
+
+  PlayPause:
+    type: Button
+    kwargs:
+      pin: 10
+      pull_up: false
+      bounce_time: 0.05
+    actions:
+      on_press:
+        alias: toggle
+
+  Next:
+    type: Button
+    kwargs:
+      pin: 11
+      pull_up: false
+      bounce_time: 0.05
+    actions:
+      on_press:
+        alias: next_song
