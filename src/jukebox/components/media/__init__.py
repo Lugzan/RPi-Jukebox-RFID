@@ -15,6 +15,7 @@ from typing import Any, Dict, Iterable, Optional
 
 import jukebox.plugs as plugin
 import jukebox.publishing as publishing
+import jukebox.cfghandler
 
 
 logger = logging.getLogger('jb.media')
@@ -263,6 +264,9 @@ class MediaRouter:
 
 
 media_ctrl: Optional[MediaRouter] = None
+bluetooth_source: Optional[MediaSource] = None
+bluetooth_monitor = None
+cfg = jukebox.cfghandler.get_handler('jukebox')
 
 
 def register_source(source: MediaSource, *, make_active: bool = False) -> None:
@@ -295,7 +299,23 @@ def release_source(source_id: str) -> None:
 
 @plugin.initialize
 def initialize():
-    global media_ctrl
+    global media_ctrl, bluetooth_source, bluetooth_monitor
     media_ctrl = MediaRouter()
     media_ctrl.register_source(MpdMediaSource())
+    if cfg.setndefault('bluetooth_media', 'enable', value=True):
+        # Delayed to avoid making the base router depend on optional D-Bus code.
+        from .bluetooth import BluezMediaMonitor, BluezMediaSource
+        bluetooth_source = BluezMediaSource()
+        bluetooth_source.set_activity_callback(
+            lambda active: media_ctrl.claim_source('bluetooth') if active else media_ctrl.release_source('bluetooth'))
+        media_ctrl.register_source(bluetooth_source)
+        bluetooth_monitor = BluezMediaMonitor(bluetooth_source)
+        bluetooth_monitor.start()
     plugin.register(media_ctrl, name='ctrl')
+
+
+@plugin.atexit
+def atexit(**ignored_kwargs):
+    """Stop the optional BlueZ watcher without affecting legacy HID controls."""
+    if bluetooth_monitor is not None:
+        return bluetooth_monitor.stop()
