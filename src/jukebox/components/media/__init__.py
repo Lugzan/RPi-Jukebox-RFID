@@ -266,6 +266,7 @@ class MediaRouter:
 media_ctrl: Optional[MediaRouter] = None
 bluetooth_source: Optional[MediaSource] = None
 bluetooth_monitor = None
+airplay_monitor = None
 cfg = jukebox.cfghandler.get_handler('jukebox')
 
 
@@ -299,7 +300,7 @@ def release_source(source_id: str) -> None:
 
 @plugin.initialize
 def initialize():
-    global media_ctrl, bluetooth_source, bluetooth_monitor
+    global media_ctrl, bluetooth_source, bluetooth_monitor, airplay_monitor
     media_ctrl = MediaRouter()
     media_ctrl.register_source(MpdMediaSource())
     if cfg.setndefault('bluetooth_media', 'enable', value=True):
@@ -311,6 +312,13 @@ def initialize():
         media_ctrl.register_source(bluetooth_source)
         bluetooth_monitor = BluezMediaMonitor(bluetooth_source)
         bluetooth_monitor.start()
+    if cfg.setndefault('airplay_media', 'enable', value=False):
+        from .airplay import AirPlayMediaMonitor, AirPlayMediaSource
+        airplay_source = AirPlayMediaSource(activity_callback=(
+            lambda active: media_ctrl.claim_source('airplay') if active else media_ctrl.release_source('airplay')))
+        media_ctrl.register_source(airplay_source)
+        airplay_monitor = AirPlayMediaMonitor(airplay_source)
+        airplay_monitor.start()
     plugin.register(media_ctrl, name='ctrl')
 
 
@@ -319,3 +327,10 @@ def atexit(**ignored_kwargs):
     """Stop the optional BlueZ watcher without affecting legacy HID controls."""
     if bluetooth_monitor is not None:
         return bluetooth_monitor.stop()
+
+
+@plugin.atexit
+def stop_airplay(**ignored_kwargs):
+    """Stop the optional receiver monitor independently of Bluetooth."""
+    if airplay_monitor is not None:
+        return airplay_monitor.stop()

@@ -148,6 +148,10 @@ bluetooth_media:
   # reports Status=playing. A connected headset alone never claims control.
   # Requires the optional dbus-next Python dependency and a running BlueZ bus.
   enable: true
+airplay_media:
+  # Optional, separately installed Shairport Sync with native system D-Bus.
+  # Only Stop (disconnect session) is supported; see documentation/builders/airplay.md.
+  enable: false
 # Espeak is the current speech synthesizer
 speaking_text:
   # All languages available here: http://espeak.sourceforge.net/languages.html
