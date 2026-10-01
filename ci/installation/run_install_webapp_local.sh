@@ -26,6 +26,7 @@ export ENABLE_WEBAPP_PROD_DOWNLOAD=false
 # y - setup webapp
 # y - build webapp
 # y - setup kiosk mode
+# n - setup airplay
 # n - reboot
 
 "${LOCAL_INSTALL_SCRIPT_PATH}/install-jukebox.sh" <<< 'y
@@ -39,5 +40,6 @@ n
 y
 y
 y
+n
 n
 '

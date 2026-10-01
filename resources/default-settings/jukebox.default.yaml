@@ -150,7 +150,8 @@ bluetooth_media:
   enable: true
 airplay_media:
   # Optional, separately installed Shairport Sync with native system D-Bus.
-  # Only Stop (disconnect session) is supported; see documentation/builders/airplay.md.
+  # Classic remote controls when available; AirPlay 2 supports Stop only.
+  # See documentation/builders/airplay.md for receiver requirements and limitations.
   enable: false
 # Espeak is the current speech synthesizer
 speaking_text:

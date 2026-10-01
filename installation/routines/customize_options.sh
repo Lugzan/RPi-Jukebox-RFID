@@ -376,6 +376,26 @@ Do you want to build the Web App? [Y/n]"
   log "ENABLE_WEBAPP_PROD_DOWNLOAD=${ENABLE_WEBAPP_PROD_DOWNLOAD}"
 }
 
+_option_airplay() {
+  if [[ "$ENABLE_AIRPLAY" != true ]]; then
+    clear_c
+    print_c "------------------------ AIRPLAY ------------------------
+
+Receive audio from Apple devices using Classic AirPlay.
+This builds Shairport Sync and shares Phoniebox's audio output.
+Build time can be several minutes. Remote buttons depend on the sender.
+
+Install the AirPlay receiver? [y/N]"
+    local response
+    read -r response
+    case "$response" in
+      [yY][eE][sS]|[yY]) ENABLE_AIRPLAY=true ;;
+      *) ENABLE_AIRPLAY=false ;;
+    esac
+  fi
+  log "ENABLE_AIRPLAY=${ENABLE_AIRPLAY}"
+}
+
 _run_customize_options() {
   _option_ipv6
   _option_static_ip
@@ -390,6 +410,7 @@ _run_customize_options() {
     _option_webapp_devel_build
     _option_kiosk_mode
   fi
+  _option_airplay
   # Bullseye is currently under active development and should be updated in any case.
   # Hence, removing the step below as it becomse mandatory
   # _options_update_raspi_os

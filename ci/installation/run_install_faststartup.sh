@@ -26,6 +26,7 @@ LOCAL_INSTALL_SCRIPT_PATH="${LOCAL_INSTALL_SCRIPT_PATH%/}"
 # n - setup webapp
 # - - build webapp (only with webapp = y)
 # - - setup kiosk mode (only with webapp = y)
+# n - setup airplay
 # n - reboot
 
 "${LOCAL_INSTALL_SCRIPT_PATH}/install-jukebox.sh" <<< 'y
@@ -34,6 +35,7 @@ y
 n
 y
 y
+n
 n
 n
 n

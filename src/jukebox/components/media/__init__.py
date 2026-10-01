@@ -315,7 +315,8 @@ def initialize():
     if cfg.setndefault('airplay_media', 'enable', value=False):
         from .airplay import AirPlayMediaMonitor, AirPlayMediaSource
         airplay_source = AirPlayMediaSource(activity_callback=(
-            lambda active: media_ctrl.claim_source('airplay') if active else media_ctrl.release_source('airplay')))
+            lambda active: media_ctrl.claim_source('airplay') if active else media_ctrl.release_source('airplay')),
+            status_callback=media_ctrl.publish_status)
         media_ctrl.register_source(airplay_source)
         airplay_monitor = AirPlayMediaMonitor(airplay_source)
         airplay_monitor.start()

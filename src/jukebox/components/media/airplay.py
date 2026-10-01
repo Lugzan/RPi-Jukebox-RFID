@@ -1,8 +1,7 @@
 """Optional Shairport Sync native D-Bus adapter (Classic and AirPlay 2).
 
-Only receiver-local session termination is advertised. Sender-side DACP
-controls are deliberately excluded because their availability varies by sender
-and they are not reliably available for AirPlay 2.
+Classic remote commands are enabled only when the receiver reports DACP
+availability. AirPlay 2 retains receiver-local session termination only.
 """
 import asyncio
 import logging
@@ -15,59 +14,111 @@ logger = logging.getLogger('jb.media.airplay')
 SERVICE = 'org.gnome.ShairportSync'
 PATH = '/org/gnome/ShairportSync'
 PROPERTIES = 'org.freedesktop.DBus.Properties'
+REMOTE = SERVICE + '.RemoteControl'
+# Same DACP requests used by Shairport Sync 5.5.2 RemoteControl handlers.
+REMOTE_COMMANDS = {
+    'play': 'play', 'pause': 'pause', 'toggle': 'playpause',
+    'next': 'nextitem', 'previous': 'previtem',
+}
 
 
 class AirPlayMediaSource(MediaSource):
-    """Claim on an Active rising edge; release on inactive or receiver loss.
+    """Claim on audio activity; retain confirmed controllable Classic pauses.
 
     Active includes Shairport's configured inactivity grace period. Repeated
     active snapshots never reclaim control after another source takes over.
     """
 
-    def __init__(self, transport=None, activity_callback=None):
+    def __init__(self, transport=None, activity_callback=None, status_callback=None):
         super().__init__('airplay', 'AirPlay', ())
         self._transport = transport
         self._activity_callback = activity_callback
+        self._status_callback = status_callback
         self._owner = None
+        self._client = ''
         self._active = False
+        self._session = False
+        self._stop_requested = False
+        self._state = 'unavailable'
         self._lock = threading.RLock()
 
-    def update(self, owner, active, can_stop=True):
-        """Apply a validated snapshot; a changed D-Bus owner is a new session."""
+    def update(self, owner, active, can_stop=True, remote=None):
+        """Apply receiver activity and optional Classic remote-control status.
+
+        Only actual activity starts a claim. A known, controllable paused client
+        may retain an existing claim after the audio inactivity grace period.
+        """
+        remote = remote or {}
+        client = remote.get('client', '')
+        enabled = remote.get('protocol') == 'AirPlay' and remote.get('available') is True
+        enabled = enabled and remote.get('can_command') is True
+        player_state = remote.get('player_state')
         with self._lock:
-            previous_owner, was_active = self._owner, self._active
-            self._owner = owner
+            before = (self._state, self._session, self.capabilities)
+            previous_owner, was_active, had_session = self._owner, self._active, self._session
+            same_client = owner == self._owner and client == self._client
+            new_client = bool(self._client and client and self._client != client)
+            if owner != previous_owner or new_client or (active and not was_active):
+                self._stop_requested = False
+            retain_pause = (had_session and same_client and bool(client) and enabled
+                            and player_state == 'Paused' and not self._stop_requested)
+            self._owner, self._client = owner, client
             self._active = bool(owner and active)
-            self.capabilities = frozenset(('stop',)) if self._active and can_stop else frozenset()
-            changed = was_active != self._active or (self._active and previous_owner != owner)
-            is_active = self._active
+            self._session = bool(owner and (self._active or retain_pause))
+            self._state = self._normalized_state(player_state, enabled)
+            commands = set()
+            if self._session and not self._stop_requested:
+                if can_stop:
+                    commands.add('stop')
+                if enabled:
+                    commands.update(REMOTE_COMMANDS)
+            self.capabilities = frozenset(commands)
+            changed = had_session != self._session or (self._active and previous_owner != owner)
+            session = self._session
+            status_changed = before != (self._state, self._session, self.capabilities)
         # Never acquire the router lock while holding the adapter lock.
         if changed and self._activity_callback is not None:
-            self._activity_callback(is_active)
+            self._activity_callback(session)
+        if status_changed and self._status_callback is not None:
+            self._status_callback()
+
+    def _normalized_state(self, player_state, remote_enabled):
+        if self._owner is None:
+            return 'unavailable'
+        if not self._session:
+            return 'stopped'
+        if remote_enabled and player_state in ('Playing', 'Paused', 'Stopped'):
+            return player_state.lower()
+        return 'playing' if self._active else 'stopped'
 
     def disconnected(self):
         self.update(None, False)
 
     def get_status(self):
         with self._lock:
-            return {
-                'state': 'unavailable' if self._owner is None else 'playing' if self._active else 'stopped',
-                'has_media': self._active,
-            }
+            return {'state': self._state, 'has_media': self._session}
 
     def invoke(self, command, *args, **kwargs):
         with self._lock:
-            if command != 'stop' or not self.supports(command) or self._transport is None:
+            if not self.supports(command) or self._transport is None:
                 logger.warning("AirPlay command '%s' is unavailable", command)
                 return False
-            owner = self._owner
+            owner, client = self._owner, self._client
         try:
-            self._transport.drop_session(owner)
+            if command == 'stop':
+                self._transport.drop_session(owner)
+                with self._lock:
+                    if (owner, client) == (self._owner, self._client):
+                        self._stop_requested = True
+                        self.capabilities = frozenset()
+            else:
+                self._transport.remote_command(owner, client, REMOTE_COMMANDS[command])
         except Exception as error:
-            logger.warning('AirPlay DropSession failed: %s', error)
+            logger.warning("AirPlay %s failed: %s", command, error)
             return False
-        # Wait for receiver inactivity; clearing Active here would make the
-        # grace-period snapshot look like a fresh session and steal control.
+        # Do not fabricate playback state from a command acknowledgement.
+        # In particular, keep the observed Active edge across DropSession's
+        # grace period so the next snapshot cannot steal control back.
         return True
 
 
@@ -82,6 +133,8 @@ class ShairportDBusTransport:
         self.bus = None
         self.owner = None
         self.can_stop = False
+        self.can_command = False
+        self.has_remote = False
 
     async def _connect(self):
         from dbus_next import BusType
@@ -106,12 +159,36 @@ class ShairportDBusTransport:
             node = await self.bus.introspect(owner, PATH)
             interface = next(i for i in node.interfaces if i.name == SERVICE)
             self.can_stop = any(m.name == 'DropSession' for m in interface.methods)
+            self.can_command = any(m.name == 'RemoteCommand' for m in interface.methods)
+            self.has_remote = any(i.name == REMOTE for i in node.interfaces)
             self.owner = owner
         properties = (await self._call(self.bus, owner, PATH, PROPERTIES, 'GetAll', 's', [SERVICE]))[0]
         active = properties['Active'].value
         if not isinstance(active, bool):
             raise ValueError('Shairport Sync Active must be a boolean')
-        return owner, active, self.can_stop
+        remote = {}
+        protocol = self._value(properties, 'Protocol')
+        if protocol == 'AirPlay' and self.has_remote and self.can_command:
+            try:
+                remote = await asyncio.wait_for(self._remote_properties(self.bus, owner), timeout=1)
+            except Exception as error:
+                # A broken optional remote interface must not lose an audible
+                # receiver's claim or remove its receiver-local Stop control.
+                logger.debug('AirPlay remote properties unavailable: %s', error)
+        return owner, active, self.can_stop, {
+            'protocol': protocol, 'can_command': self.can_command,
+            'available': self._value(remote, 'Available') is True,
+            'player_state': self._value(remote, 'PlayerState'),
+            'client': self._value(remote, 'Client') or '',
+        }
+
+    @staticmethod
+    def _value(properties, name):
+        value = properties.get(name)
+        return value.value if value is not None else None
+
+    async def _remote_properties(self, bus, owner):
+        return (await self._call(bus, owner, PATH, PROPERTIES, 'GetAll', 's', [REMOTE]))[0]
 
     def close(self):
         if self.bus is not None:
@@ -121,6 +198,30 @@ class ShairportDBusTransport:
 
     def drop_session(self, owner):
         asyncio.run(asyncio.wait_for(self._drop_session(owner), timeout=3))
+
+    def remote_command(self, owner, client, command):
+        if command not in REMOTE_COMMANDS.values():
+            raise ValueError('Unsupported AirPlay remote command')
+        asyncio.run(asyncio.wait_for(self._remote_command(owner, client, command), timeout=3))
+
+    async def _remote_command(self, owner, client, command):
+        bus = await self._connect()
+        try:
+            # Recheck availability and client immediately before dispatch: the
+            # monitor's last snapshot may belong to a different sender.
+            protocol = (await self._call(bus, owner, PATH, PROPERTIES, 'Get', 'ss', [SERVICE, 'Protocol']))[0]
+            remote = await self._remote_properties(bus, owner)
+            if (protocol.value != 'AirPlay' or self._value(remote, 'Available') is not True
+                    or (self._value(remote, 'Client') or '') != client):
+                raise RuntimeError('Classic remote control is no longer available for this client')
+            reply = await self._call(bus, owner, PATH, SERVICE, 'RemoteCommand', 's', [command])
+            # The named Play/Pause/etc. methods discard the DACP response.
+            # RemoteCommand preserves its HTTP-style code (including 49x
+            # connection errors and zero when DACP is not compiled in).
+            if not reply or type(reply[0]) is not int or not 200 <= reply[0] < 300:
+                raise RuntimeError(f'DACP command rejected or failed (reply code {reply[0] if reply else None})')
+        finally:
+            bus.disconnect()
 
     async def _drop_session(self, owner):
         bus = await self._connect()

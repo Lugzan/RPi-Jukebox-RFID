@@ -20,6 +20,7 @@ ENABLE_RFID_READER=true
 ENABLE_SAMBA=true
 ENABLE_WEBAPP=true
 ENABLE_KIOSK_MODE=false
+ENABLE_AIRPLAY=${ENABLE_AIRPLAY:-"false"}
 DISABLE_ONBOARD_AUDIO=false
 # Always try to use GIT with SSH first, and on failure drop down to HTTPS
 GIT_USE_SSH=${GIT_USE_SSH:-"true"}

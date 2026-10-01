@@ -26,9 +26,11 @@ export BUILD_LIBZMQ_WITH_DRAFTS_ON_DEVICE=true
 # n - setup webapp
 # - - build webapp (only with webapp = y)
 # - - setup kiosk mode (only with webapp = y)
+# n - setup airplay
 # n - reboot
 
 "${LOCAL_INSTALL_SCRIPT_PATH}/install-jukebox.sh" <<< 'y
+n
 n
 n
 n

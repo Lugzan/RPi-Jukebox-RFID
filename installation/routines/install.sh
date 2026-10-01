@@ -16,5 +16,6 @@ install() {
   optimize_boot_time
   setup_autohotspot
   setup_postinstall
+  setup_airplay
   cleanup
 }
