@@ -6,6 +6,7 @@ availability. AirPlay 2 retains receiver-local session termination only.
 import asyncio
 import logging
 import threading
+import time
 
 from . import MediaSource
 
@@ -41,6 +42,7 @@ class AirPlayMediaSource(MediaSource):
         self._stop_requested = False
         self._state = 'unavailable'
         self._lock = threading.RLock()
+        self._last_observation = None
 
     def update(self, owner, active, can_stop=True, remote=None):
         """Apply receiver activity and optional Classic remote-control status.
@@ -76,6 +78,17 @@ class AirPlayMediaSource(MediaSource):
             changed = had_session != self._session or (self._active and previous_owner != owner)
             session = self._session
             status_changed = before != (self._state, self._session, self.capabilities)
+            observation = (owner, client, self._active, can_stop, remote.get('protocol'),
+                           remote.get('available'), remote.get('can_command'), player_state,
+                           self._session, self._stop_requested, self.capabilities)
+            if observation != self._last_observation:
+                logger.info('AirPlay observation: owner=%s active=%s protocol=%s remote_available=%s '
+                            'can_command=%s can_stop=%s client_present=%s client_changed=%s '
+                            'player_state=%s state=%s session=%s stop_requested=%s capabilities=%s',
+                            owner, self._active, remote.get('protocol'), remote.get('available'),
+                            remote.get('can_command'), can_stop, bool(client), not same_client,
+                            player_state, self._state, self._session, self._stop_requested, sorted(commands))
+                self._last_observation = observation
         # Never acquire the router lock while holding the adapter lock.
         if changed and self._activity_callback is not None:
             self._activity_callback(session)
@@ -99,11 +112,14 @@ class AirPlayMediaSource(MediaSource):
             return {'state': self._state, 'has_media': self._session}
 
     def invoke(self, command, *args, **kwargs):
+        started = time.monotonic()
         with self._lock:
             if not self.supports(command) or self._transport is None:
                 logger.warning("AirPlay command '%s' is unavailable", command)
                 return False
             owner, client = self._owner, self._client
+            logger.debug('AirPlay command: command=%s owner=%s state=%s active=%s session=%s',
+                         command, owner, self._state, self._active, self._session)
         try:
             if command == 'stop':
                 self._transport.drop_session(owner)
@@ -114,11 +130,14 @@ class AirPlayMediaSource(MediaSource):
             else:
                 self._transport.remote_command(owner, client, REMOTE_COMMANDS[command])
         except Exception as error:
-            logger.warning("AirPlay %s failed: %s", command, error)
+            logger.warning("AirPlay %s failed: owner=%s elapsed_ms=%.1f error=%s",
+                           command, owner, (time.monotonic() - started) * 1000, error, exc_info=True)
             return False
         # Do not fabricate playback state from a command acknowledgement.
         # In particular, keep the observed Active edge across DropSession's
         # grace period so the next snapshot cannot steal control back.
+        logger.debug('AirPlay command acknowledged: command=%s owner=%s elapsed_ms=%.1f; awaiting receiver state',
+                     command, owner, (time.monotonic() - started) * 1000)
         return True
 
 
@@ -135,6 +154,7 @@ class ShairportDBusTransport:
         self.can_stop = False
         self.can_command = False
         self.has_remote = False
+        self._remote_failed = False
 
     async def _connect(self):
         from dbus_next import BusType
@@ -162,6 +182,8 @@ class ShairportDBusTransport:
             self.can_command = any(m.name == 'RemoteCommand' for m in interface.methods)
             self.has_remote = any(i.name == REMOTE for i in node.interfaces)
             self.owner = owner
+            logger.info('Shairport interface discovered: owner=%s can_stop=%s can_command=%s has_remote=%s',
+                        owner, self.can_stop, self.can_command, self.has_remote)
         properties = (await self._call(self.bus, owner, PATH, PROPERTIES, 'GetAll', 's', [SERVICE]))[0]
         active = properties['Active'].value
         if not isinstance(active, bool):
@@ -171,10 +193,16 @@ class ShairportDBusTransport:
         if protocol == 'AirPlay' and self.has_remote and self.can_command:
             try:
                 remote = await asyncio.wait_for(self._remote_properties(self.bus, owner), timeout=1)
+                if self._remote_failed:
+                    logger.info('AirPlay remote properties recovered: owner=%s', owner)
+                self._remote_failed = False
             except Exception as error:
                 # A broken optional remote interface must not lose an audible
                 # receiver's claim or remove its receiver-local Stop control.
-                logger.debug('AirPlay remote properties unavailable: %s', error)
+                if not self._remote_failed:
+                    logger.warning('AirPlay remote properties unavailable: owner=%s error=%s', owner, error,
+                                   exc_info=True)
+                self._remote_failed = True
         return owner, active, self.can_stop, {
             'protocol': protocol, 'can_command': self.can_command,
             'available': self._value(remote, 'Available') is True,
@@ -192,9 +220,11 @@ class ShairportDBusTransport:
 
     def close(self):
         if self.bus is not None:
+            logger.debug('Closing Shairport monitor connection: owner=%s', self.owner)
             self.bus.disconnect()
         self.bus = None
         self.owner = None
+        self._remote_failed = False
 
     def drop_session(self, owner):
         asyncio.run(asyncio.wait_for(self._drop_session(owner), timeout=3))
@@ -215,6 +245,8 @@ class ShairportDBusTransport:
                     or (self._value(remote, 'Client') or '') != client):
                 raise RuntimeError('Classic remote control is no longer available for this client')
             reply = await self._call(bus, owner, PATH, SERVICE, 'RemoteCommand', 's', [command])
+            logger.debug('AirPlay DACP response: owner=%s command=%s code=%r',
+                         owner, command, reply[0] if reply else None)
             # The named Play/Pause/etc. methods discard the DACP response.
             # RemoteCommand preserves its HTTP-style code (including 49x
             # connection errors and zero when DACP is not compiled in).
@@ -247,11 +279,13 @@ class AirPlayMediaMonitor:
 
     def start(self):
         if self._thread is None:
+            logger.info('Starting AirPlay media monitor: service=%s poll_s=0.5 retry_s=2 timeout_s=3', SERVICE)
             self._thread = threading.Thread(target=self._run, name='AirPlayMediaMonitor', daemon=True)
             self._thread.start()
 
     def stop(self):
         self._stopped.set()
+        logger.info('Stopping AirPlay media monitor')
         return self._thread
 
     def _run(self):
@@ -263,15 +297,18 @@ class AirPlayMediaMonitor:
                     snapshot = loop.run_until_complete(asyncio.wait_for(self.transport.snapshot(), timeout=3))
                     if not self._stopped.is_set():
                         self.source.update(*snapshot)
+                    if failed:
+                        logger.info('AirPlay receiver recovered: owner=%s', snapshot[0])
                     failed = False
                 except Exception as error:
                     self.source.disconnected()
                     self.transport.close()
                     if not failed:
-                        logger.warning('AirPlay receiver unavailable: %s', error)
+                        logger.warning('AirPlay receiver unavailable; retrying in 2s: %s', error, exc_info=True)
                     failed = True
                 self._stopped.wait(2 if failed else 0.5)
         finally:
             self.transport.close()
             self.source.disconnected()
             loop.close()
+            logger.info('AirPlay media monitor exited')

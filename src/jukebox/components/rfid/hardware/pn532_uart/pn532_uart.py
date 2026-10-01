@@ -108,13 +108,19 @@ class ReaderClass(ReaderBaseClass):
         self.clf = None
         self._keep_running = True
         self._next_reconnect = 0.0
+        self._connect_attempts = 0
+        self._scan_counts = dict(scans=0, targets=0, cards=0, errors=0)
+        self._next_scan_summary = time.monotonic() + 30
+        self._logger.info('PN532 UART configured: device=%s reconnect_s=%s log_all_cards=%s',
+                          self.device, RECONNECT_DELAY, self.log_all_cards)
 
     def _disconnect(self):
         if self.clf is not None:
+            self._logger.debug('Closing PN532 UART connection: device=%s', self.device)
             try:
                 self.clf.close()
             except (OSError, getattr(nfc.clf, 'Error', OSError)) as error:
-                self._logger.debug(f"Error while closing PN532 UART reader: {error}")
+                self._logger.debug('Error while closing PN532 UART reader: %s', error, exc_info=True)
             finally:
                 self.clf = None
 
@@ -125,16 +131,21 @@ class ReaderClass(ReaderBaseClass):
             return False
 
         self._next_reconnect = time.monotonic() + RECONNECT_DELAY
+        self._connect_attempts += 1
+        started = time.monotonic()
         clf = None
         try:
             nfcpy_path = device_to_nfcpy_path(self.device)
+            self._logger.debug('Opening PN532 UART: attempt=%d device=%s resolved=%s nfcpy_path=%s',
+                               self._connect_attempts, self.device, os.path.realpath(self.device), nfcpy_path)
             clf = nfc.ContactlessFrontend()
             if not clf.open(nfcpy_path):
                 self._logger.warning(f"Could not open PN532 UART reader at '{self.device}'. Will retry.")
                 clf.close()
                 return False
             self.clf = clf
-            self._logger.info(f"Connected PN532 UART reader at '{self.device}' ({nfcpy_path}).")
+            self._logger.info('Connected PN532 UART: device=%s nfcpy_path=%s attempt=%d elapsed_ms=%.1f',
+                              self.device, nfcpy_path, self._connect_attempts, (time.monotonic() - started) * 1000)
             return True
         except (OSError, ValueError, getattr(nfc.clf, 'Error', OSError)) as error:
             if clf is not None:
@@ -142,13 +153,18 @@ class ReaderClass(ReaderBaseClass):
                     clf.close()
                 except (OSError, getattr(nfc.clf, 'Error', OSError)):
                     pass
-            self._logger.warning(f"Could not open PN532 UART reader at '{self.device}': {error}. Will retry.")
+            self._logger.warning('Could not open PN532 UART: device=%s attempt=%d elapsed_ms=%.1f '
+                                 'retry_s=%s error=%s', self.device, self._connect_attempts,
+                                 (time.monotonic() - started) * 1000, RECONNECT_DELAY, error, exc_info=True)
             return False
 
     def cleanup(self):
+        self._logger.info('PN532 UART cleanup: device=%s attempts=%d totals=%s',
+                          self.device, self._connect_attempts, self._scan_counts.copy())
         self._disconnect()
 
     def stop(self):
+        self._logger.info('PN532 UART stop requested: device=%s', self.device)
         self._keep_running = False
 
     def read_card(self) -> str:
@@ -156,17 +172,28 @@ class ReaderClass(ReaderBaseClass):
             return ''
 
         try:
+            self._scan_counts['scans'] += 1
             target = self.clf.sense(RemoteTarget('106A'), interval=0.1, iterations=1)
             if not target:
                 return ''
+            self._scan_counts['targets'] += 1
             tag = nfc.tag.activate(self.clf, target)
             if not tag:
                 return ''
             card_id = uid_to_card_id(tag.identifier)
+            if card_id:
+                self._scan_counts['cards'] += 1
             if self.log_all_cards and card_id:
                 self._logger.debug(f"Card detected with ID = '{card_id}'")
             return card_id
         except (OSError, getattr(nfc.clf, 'Error', OSError)) as error:
-            self._logger.warning(f"PN532 UART communication error: {error}. Reconnecting.")
+            self._scan_counts['errors'] += 1
+            self._logger.warning('PN532 UART communication error: device=%s totals=%s error=%s; reconnecting',
+                                 self.device, self._scan_counts.copy(), error, exc_info=True)
             self._disconnect()
             return ''
+        finally:
+            if time.monotonic() >= self._next_scan_summary:
+                self._logger.debug('PN532 UART scan totals: device=%s connected=%s totals=%s',
+                                   self.device, self.clf is not None, self._scan_counts.copy())
+                self._next_scan_summary = time.monotonic() + 30

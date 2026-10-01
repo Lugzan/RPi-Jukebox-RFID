@@ -7,6 +7,7 @@ whose ``Status`` is ``playing`` claims the media router.
 import asyncio
 import logging
 import threading
+import time
 from collections.abc import Mapping
 from typing import Any, Callable, Dict, Iterable, Optional
 
@@ -52,6 +53,7 @@ class BluezMediaSource(MediaSource):
         """Set the D-Bus transport after its event loop has connected."""
         with self._lock:
             self._transport = transport
+        logger.info('BlueZ transport ready=%s', transport is not None)
 
     def set_activity_callback(self, callback: Callable[[bool], None]) -> None:
         """Call ``callback`` when the aggregate playback activity changes."""
@@ -64,6 +66,7 @@ class BluezMediaSource(MediaSource):
         with self._lock:
             was_active = self._is_active_locked()
             current = self._players.setdefault(path, {})
+            old_status = current.get('Status')
             current.update(dict(properties))
             if self._status_is_playing(current):
                 self._active_player_path = path
@@ -71,6 +74,10 @@ class BluezMediaSource(MediaSource):
                 self._active_player_path = self._find_playing_player_locked()
             self._refresh_capabilities_locked()
             active = self._is_active_locked()
+            if old_status != current.get('Status'):
+                logger.info("BlueZ player state: path=%s status=%r previous=%r active=%s selected=%s capabilities=%s",
+                            path, current.get('Status'), old_status, active,
+                            self._active_player_path, sorted(self.capabilities))
             if active != was_active:
                 callback = self._activity_callback
         if callback is not None:
@@ -87,6 +94,8 @@ class BluezMediaSource(MediaSource):
                 self._active_player_path = self._find_playing_player_locked()
             self._refresh_capabilities_locked()
             active = self._is_active_locked()
+            logger.info('BlueZ player removed: path=%s active=%s selected=%s remaining=%d',
+                        path, active, self._active_player_path, len(self._players))
             if active != was_active:
                 callback = self._activity_callback
         if callback is not None:
@@ -98,6 +107,8 @@ class BluezMediaSource(MediaSource):
         with self._lock:
             path = self._active_player_path
             if path is None or self._transport is None or not self.supports(command):
+                logger.warning('BlueZ command unavailable: command=%s player=%s transport_ready=%s capabilities=%s',
+                               command, path, self._transport is not None, sorted(self.capabilities))
                 return None
             method = self._method_for_command_locked(command, path)
         if method is None:
@@ -113,7 +124,7 @@ class BluezMediaSource(MediaSource):
                 logger.info("BlueZ player '%s' does not support %s", path, command)
             else:
                 logger.warning("BlueZ %s failed for '%s': %s: %s",
-                               method, path, error.__class__.__name__, error)
+                               method, path, error.__class__.__name__, error, exc_info=True)
             return None
 
     def get_status(self) -> Dict[str, Any]:
@@ -234,17 +245,21 @@ class BluezMediaMonitor:
         if self._thread is not None:
             return
         self._thread = threading.Thread(target=self._run, daemon=True, name='BluezMediaMonitor')
+        logger.info('Starting BlueZ media monitor: service=%s', BLUEZ_SERVICE)
         self._thread.start()
 
     def stop(self):
         """Stop the monitor and return its thread for plugin shutdown."""
         self._stopped.set()
+        logger.info('Stopping BlueZ media monitor')
         if self._loop is not None:
             self._loop.call_soon_threadsafe(self._loop.stop)
         return self._thread
 
     def process_managed_objects(self, objects: Mapping[str, Mapping[str, Mapping[str, Any]]]) -> None:
         """Process ``ObjectManager.GetManagedObjects`` output (also test hook)."""
+        logger.debug('BlueZ initial discovery: objects=%d players=%d', len(objects),
+                     sum(MEDIA_PLAYER_INTERFACE in interfaces for interfaces in objects.values()))
         for path, interfaces in objects.items():
             properties = interfaces.get(MEDIA_PLAYER_INTERFACE)
             if properties is not None:
@@ -265,6 +280,8 @@ class BluezMediaMonitor:
                            invalidated: Iterable[str] = ()) -> None:
         """Handle a ``PropertiesChanged`` update (also test hook)."""
         if interface == MEDIA_PLAYER_INTERFACE:
+            logger.debug('BlueZ properties changed: path=%s fields=%s invalidated=%s',
+                         path, sorted(changed), invalidated)
             self.source.update_player(str(path), changed)
             if 'Status' in invalidated:
                 # Do not leave a stale playing state in control if BlueZ omits
@@ -280,18 +297,27 @@ class BluezMediaMonitor:
             return
 
         self._loop = asyncio.new_event_loop()
+        self._loop.set_exception_handler(self._log_async_error)
         asyncio.set_event_loop(self._loop)
         try:
             self._loop.run_until_complete(self._connect(MessageBus, BusType))
+            logger.info('BlueZ media monitor connected: watched_players=%d', len(self._player_properties))
             if not self._stopped.is_set():
                 self._loop.run_forever()
         except Exception as error:
             logger.warning('Bluetooth media monitor could not connect to BlueZ: %s: %s',
-                           error.__class__.__name__, error)
+                           error.__class__.__name__, error, exc_info=True)
         finally:
             if self._bus is not None:
                 self._bus.disconnect()
             self._loop.close()
+            logger.info('BlueZ media monitor exited: shutdown_requested=%s', self._stopped.is_set())
+
+    @staticmethod
+    def _log_async_error(loop, context):
+        error = context.get('exception')
+        logger.error('BlueZ background operation failed: %s', context.get('message'),
+                     exc_info=(type(error), error, error.__traceback__) if error is not None else None)
 
     async def _connect(self, message_bus, bus_type) -> None:
         self._bus = await message_bus(bus_type=bus_type.SYSTEM).connect()
@@ -318,6 +344,7 @@ class BluezMediaMonitor:
             lambda interface, changed, invalidated: self._on_player_properties_changed(
                 path, interface, changed, invalidated))
         self._player_properties[path] = properties
+        logger.debug('BlueZ property watch installed: path=%s', path)
 
     def _on_player_properties_changed(self, path, interface, changed, invalidated) -> None:
         self.properties_changed(path, interface, changed, invalidated)
@@ -331,7 +358,7 @@ class BluezMediaMonitor:
         try:
             self.source.update_player(path, await properties.call_get_all(MEDIA_PLAYER_INTERFACE))
         except Exception as error:
-            logger.debug("Could not refresh BlueZ player '%s': %s", path, error)
+            logger.debug("Could not refresh BlueZ player '%s': %s", path, error, exc_info=True)
 
     def _on_interfaces_added(self, path, interfaces) -> None:
         self.interfaces_added(path, interfaces)
@@ -345,9 +372,16 @@ class BluezMediaMonitor:
     def call(self, path: str, method: str):
         """Synchronously invoke a MediaPlayer1 method from the router thread."""
         if self._loop is None or self._loop.is_closed():
+            logger.warning('BlueZ D-Bus command skipped: loop unavailable path=%s method=%s', path, method)
             return None
+        started = time.monotonic()
+        logger.debug('BlueZ D-Bus command: path=%s method=%s timeout_s=5', path, method)
         future = asyncio.run_coroutine_threadsafe(self._call(path, method), self._loop)
-        return future.result(timeout=5)
+        try:
+            return future.result(timeout=5)
+        finally:
+            logger.debug('BlueZ D-Bus wait ended: path=%s method=%s done=%s elapsed_ms=%.1f',
+                         path, method, future.done(), (time.monotonic() - started) * 1000)
 
     async def _call(self, path: str, method: str):
         player = await self._get_interface(path, MEDIA_PLAYER_INTERFACE)

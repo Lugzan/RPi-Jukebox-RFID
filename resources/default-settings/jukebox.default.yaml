@@ -62,6 +62,10 @@ pulse:
       # pulse_sink_name: bluez_sink.C4_FB_20_63_CO_FE.a2dp_sink
 jingle:
    # Supported file formats as jingles: *.wav and *.mp3. Note that *.wav is faster!
+  # Each sound can also be a directory: play one random .wav or .mp3 file directly inside it.
+  # Use lowercase extensions. Empty directories are skipped with a warning.
+  # For example: startup_sound: ../../shared/audio/on_start
+  #              shutdown_sound: ../../shared/audio/on_stop
   startup_sound: ../../resources/audio/startupsound.wav
   # startup_sound: ../../resources/audio/startupsound.mp3
   # Shutdown sound is not played on Ctrl-C (to reduce developer's stain)

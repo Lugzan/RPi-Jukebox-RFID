@@ -68,7 +68,12 @@ class NameMixin(ABC):
                                                    'kwargs': None,
                                                    'args': msg}, dereference=True, logger=logger)
 
-        return func
+        @functools.wraps(func)
+        def logged_action(*args, **kwargs):
+            logger.debug("GPIO action triggered: device=%s action=%s", self._name, action_name)
+            return func(*args, **kwargs)
+
+        return logged_action
 
     @abstractmethod
     def set_rpc_actions(self, action_config) -> None:

@@ -4,6 +4,7 @@ import os
 import sys
 import types
 import unittest
+from unittest.mock import patch
 
 
 # The project imports from src/jukebox when run outside its normal launcher.
@@ -165,6 +166,20 @@ class TestPn532Uart(unittest.TestCase):
             )
         finally:
             pn532_uart.os.path.realpath = original_realpath
+
+    def test_idle_polling_emits_one_periodic_summary_instead_of_per_scan_logs(self):
+        with patch.object(pn532_uart.time, 'monotonic', return_value=0) as clock:
+            reader = pn532_uart.ReaderClass('read_00')
+            with self.assertLogs(reader._logger, level='DEBUG') as captured:
+                for _ in range(100):
+                    self.assertEqual(reader.read_card(), '')
+                clock.return_value = 30
+                reader.read_card()
+                reader.read_card()
+            summaries = [record for record in captured.records if 'scan totals:' in record.getMessage()]
+            self.assertEqual(len(summaries), 1)
+            self.assertIn("'scans': 101", summaries[0].getMessage())
+            self.assertIn("'targets': 0", summaries[0].getMessage())
 
 
 if __name__ == '__main__':

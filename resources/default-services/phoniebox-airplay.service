@@ -1,0 +1,14 @@
+[Unit]
+Description=Phoniebox Classic AirPlay receiver
+After=pulseaudio.service jukebox-daemon.service
+Requires=pulseaudio.service
+
+[Service]
+Type=simple
+ExecStart=/opt/phoniebox-airplay/bin/shairport-sync -c /etc/phoniebox-airplay.conf
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

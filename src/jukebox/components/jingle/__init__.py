@@ -5,6 +5,7 @@ Jingle Playback Factory for extensible run-time support of various file types
 """
 
 import os.path
+import random
 import signal
 import logging
 import jukebox.plugs as plugin
@@ -88,14 +89,30 @@ def play(filename):
 
 @plugin.register
 def play_startup():
-    """Play the startup sound (using jingle.play)"""
-    play(cfg['jingle']['startup_sound'])
+    """Play the startup sound, choosing a random file if configured with a directory."""
+    _play_lifecycle_sound(cfg['jingle']['startup_sound'])
 
 
 @plugin.register
 def play_shutdown():
-    """Play the shutdown sound (using jingle.play)"""
-    play(cfg['jingle']['shutdown_sound'])
+    """Play the shutdown sound, choosing a random file if configured with a directory."""
+    _play_lifecycle_sound(cfg['jingle']['shutdown_sound'])
+
+
+def _play_lifecycle_sound(path):
+    if os.path.isdir(path):
+        try:
+            with os.scandir(path) as entries:
+                files = [entry.path for entry in entries
+                         if entry.is_file() and os.path.splitext(entry.name)[1] in ('.wav', '.mp3')]
+        except OSError as error:
+            logger.warning("Cannot read jingle directory '%s': %s", path, error)
+            return
+        if not files:
+            logger.warning("No .wav or .mp3 files in jingle directory '%s'", path)
+            return
+        path = random.choice(files)
+    play(path)
 
 
 @plugin.finalize

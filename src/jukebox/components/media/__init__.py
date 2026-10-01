@@ -10,6 +10,7 @@ becoming the target for subsequent transport commands.
 """
 import logging
 import threading
+import time
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Iterable, Optional
 
@@ -92,6 +93,7 @@ class MediaRouter:
         self._sources: Dict[str, MediaSource] = {}
         self._active_source_id: Optional[str] = None
         self._lock = threading.RLock()
+        self._command_sequence = 0
 
     def register_source(self, source: MediaSource, *, make_active: bool = False) -> None:
         """Register a media source adapter.
@@ -111,6 +113,8 @@ class MediaRouter:
             self._sources[source.source_id] = source
             if self._active_source_id is None or make_active:
                 self._active_source_id = source.source_id
+            logger.info("Registered media source '%s': capabilities=%s active=%s",
+                        source.source_id, sorted(source.capabilities), self._active_source_id)
         self.publish_status()
 
     def unregister_source(self, source_id: str) -> None:
@@ -121,22 +125,34 @@ class MediaRouter:
             del self._sources[source_id]
             if self._active_source_id == source_id:
                 self._active_source_id = 'mpd' if 'mpd' in self._sources else None
+            logger.info("Unregistered media source '%s': active=%s", source_id, self._active_source_id)
         self.publish_status()
 
     def claim_source(self, source_id: str) -> None:
         """Make a new playback source active, stopping the previously active one."""
+        logger.debug("Media claim requested: source=%s", source_id)
         with self._lock:
             source = self._get_source_locked(source_id)
             previous = self._get_active_source_locked()
             if previous is source:
+                logger.debug("Media claim unchanged: source=%s", source_id)
                 return
             if previous is not None and previous.supports('stop'):
                 logger.info("Media source '%s' claims control; stopping '%s'", source_id, previous.source_id)
                 try:
-                    previous.invoke('stop')
-                except Exception as e:
-                    logger.error("Could not stop former source '%s': %s: %s",
-                                 previous.source_id, e.__class__.__name__, e)
+                    started = time.monotonic()
+                    result = previous.invoke('stop')
+                    logger.debug("Handoff stop returned: source=%s result=%r elapsed_ms=%.1f",
+                                 previous.source_id, result, (time.monotonic() - started) * 1000)
+                    if result is False:
+                        logger.warning("Handoff continuing despite rejected stop: previous=%s requested=%s",
+                                       previous.source_id, source_id)
+                except Exception:
+                    logger.exception("Could not stop former source '%s' during claim by '%s'",
+                                     previous.source_id, source_id)
+            elif previous is not None:
+                logger.warning("Handoff without stop capability: previous=%s requested=%s",
+                               previous.source_id, source_id)
             self._active_source_id = source_id
         logger.info("Media source '%s' is now active", source_id)
         self.publish_status()
@@ -145,8 +161,10 @@ class MediaRouter:
         """Release an active source and fall back to MPD without resuming it."""
         with self._lock:
             if self._active_source_id != source_id:
+                logger.debug("Ignoring media release: source=%s active=%s", source_id, self._active_source_id)
                 return
             self._active_source_id = 'mpd' if source_id != 'mpd' and 'mpd' in self._sources else None
+            logger.info("Media source released: source=%s fallback=%s", source_id, self._active_source_id)
         self.publish_status()
 
     def _get_source_locked(self, source_id: str) -> MediaSource:
@@ -161,6 +179,8 @@ class MediaRouter:
         return self._sources.get(self._active_source_id)
 
     def _dispatch(self, command: str, *args, **kwargs) -> Any:
+        started = time.monotonic()
+        logger.debug("Media command requested: command=%s", command)
         with self._lock:
             source = self._get_active_source_locked()
             if source is None:
@@ -169,7 +189,18 @@ class MediaRouter:
             if not source.supports(command):
                 logger.warning("Ignoring '%s': active source '%s' does not support it", command, source.source_id)
                 return None
-            result = source.invoke(command, *args, **kwargs)
+            self._command_sequence += 1
+            command_id = self._command_sequence
+            logger.debug("Media command #%d dispatch: source=%s command=%s capabilities=%s",
+                         command_id, source.source_id, command, sorted(source.capabilities))
+            try:
+                result = source.invoke(command, *args, **kwargs)
+            except Exception:
+                logger.exception("Media command #%d failed: source=%s command=%s elapsed_ms=%.1f",
+                                 command_id, source.source_id, command, (time.monotonic() - started) * 1000)
+                raise
+            logger.debug("Media command #%d returned: source=%s command=%s result=%r elapsed_ms=%.1f",
+                         command_id, source.source_id, command, result, (time.monotonic() - started) * 1000)
         self.publish_status()
         return result
 
@@ -186,9 +217,8 @@ class MediaRouter:
                 }
             try:
                 status = source.get_status()
-            except Exception as e:
-                logger.error("Could not obtain status from '%s': %s: %s",
-                             source.source_id, e.__class__.__name__, e)
+            except Exception:
+                logger.exception("Could not obtain status from '%s'", source.source_id)
                 status = {'state': 'unavailable'}
 
             normalized = {
@@ -303,6 +333,9 @@ def initialize():
     global media_ctrl, bluetooth_source, bluetooth_monitor, airplay_monitor
     media_ctrl = MediaRouter()
     media_ctrl.register_source(MpdMediaSource())
+    logger.info("Media router configuration: bluetooth_enabled=%s airplay_enabled=%s",
+                cfg.setndefault('bluetooth_media', 'enable', value=True),
+                cfg.setndefault('airplay_media', 'enable', value=False))
     if cfg.setndefault('bluetooth_media', 'enable', value=True):
         # Delayed to avoid making the base router depend on optional D-Bus code.
         from .bluetooth import BluezMediaMonitor, BluezMediaSource
