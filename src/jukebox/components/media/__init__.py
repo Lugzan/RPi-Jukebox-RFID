@@ -12,6 +12,7 @@ import logging
 import threading
 import time
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from typing import Any, Dict, Iterable, Optional
 
 import jukebox.plugs as plugin
@@ -55,15 +56,18 @@ class MpdMediaSource(MediaSource):
         'stop': 'stop',
     }
 
-    def __init__(self):
+    def __init__(self, player):
         super().__init__('mpd', 'Local MPD', self._COMMANDS.keys())
+        # Resolve once during plugin initialization. Taking the plugin registry
+        # lock inside the router lock deadlocks with RPC calls in the other order.
+        self._player = player
 
     def invoke(self, command: str, *args, **kwargs) -> Any:
         method = self._COMMANDS[command]
-        return plugin.call_ignore_errors('player', 'ctrl', method, args=args, kwargs=kwargs)
+        return getattr(self._player, method)(*args, **kwargs)
 
     def get_status(self) -> Dict[str, Any]:
-        status = plugin.call_ignore_errors('player', 'ctrl', 'playerstatus')
+        status = self._player.playerstatus()
         if not isinstance(status, dict):
             return {'state': 'unavailable'}
         return {
@@ -166,6 +170,18 @@ class MediaRouter:
             self._active_source_id = 'mpd' if source_id != 'mpd' and 'mpd' in self._sources else None
             logger.info("Media source released: source=%s fallback=%s", source_id, self._active_source_id)
         self.publish_status()
+
+    @contextmanager
+    def local_playback(self, *, claim=True):
+        """Serialize local playback and handoff before acquiring MPD's lock.
+
+        Composite card/replay actions can defer claiming until they actually
+        invoke playback, while retaining this lock across their nested calls.
+        """
+        with self._lock:
+            if claim:
+                self.claim_source('mpd')
+            yield
 
     def _get_source_locked(self, source_id: str) -> MediaSource:
         try:
@@ -332,14 +348,17 @@ def release_source(source_id: str) -> None:
 def initialize():
     global media_ctrl, bluetooth_source, bluetooth_monitor, airplay_monitor
     media_ctrl = MediaRouter()
-    media_ctrl.register_source(MpdMediaSource())
+    player = plugin.get('player', 'ctrl')
+    media_ctrl.register_source(MpdMediaSource(player))
+    if hasattr(player, 'set_media_router'):
+        player.set_media_router(media_ctrl)
     logger.info("Media router configuration: bluetooth_enabled=%s airplay_enabled=%s",
                 cfg.setndefault('bluetooth_media', 'enable', value=True),
                 cfg.setndefault('airplay_media', 'enable', value=False))
     if cfg.setndefault('bluetooth_media', 'enable', value=True):
         # Delayed to avoid making the base router depend on optional D-Bus code.
         from .bluetooth import BluezMediaMonitor, BluezMediaSource
-        bluetooth_source = BluezMediaSource()
+        bluetooth_source = BluezMediaSource(status_callback=media_ctrl.publish_status)
         bluetooth_source.set_activity_callback(
             lambda active: media_ctrl.claim_source('bluetooth') if active else media_ctrl.release_source('bluetooth'))
         media_ctrl.register_source(bluetooth_source)

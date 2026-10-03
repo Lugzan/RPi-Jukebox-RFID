@@ -103,7 +103,7 @@ class UnsupportedAvrcpMethod(Exception):
     type = 'org.bluez.Error.NotSupported'
 
 
-def test_bluetooth_claims_only_while_a_media_player_is_playing():
+def test_bluetooth_claims_on_playback_and_retains_a_paused_session():
     router = MediaRouter()
     mpd = FakeSource('mpd')
     bluetooth = BluezMediaSource()
@@ -130,11 +130,9 @@ def test_bluetooth_claims_only_while_a_media_player_is_playing():
     monitor.properties_changed('/org/bluez/hci0/dev_phone/player0', 'org.bluez.MediaPlayer1', {
         'Status': 'paused',
     })
-    assert router.get_active_source() == 'mpd'
+    assert router.get_active_source() == 'bluetooth'
+    assert 'toggle' in bluetooth.capabilities
 
-    monitor.properties_changed('/org/bluez/hci0/dev_phone/player0', 'org.bluez.MediaPlayer1', {
-        'Status': 'playing',
-    })
     monitor.interfaces_removed('/org/bluez/hci0/dev_phone/player0', ['org.bluez.MediaPlayer1'])
     assert router.get_active_source() == 'mpd'
 

@@ -53,16 +53,19 @@ def test_airplay_polling_logs_changes_without_repeating_identical_snapshots(capl
     assert 'private-client-address' not in caplog.text
 
 
-def test_bluetooth_logs_native_property_shape_without_track_metadata(caplog):
+def test_bluetooth_logs_decoded_state_without_track_metadata(caplog):
     from dbus_next import Variant
     caplog.set_level(logging.INFO, logger='jb.media.bluetooth')
     source = BluezMediaSource()
-    source.update_player('/player', {'Status': Variant('s', 'playing'),
-                                     'Track': Variant('a{sv}', {'Title': Variant('s', 'Private title')})})
+    monitor = BluezMediaMonitor(source)
+    monitor.properties_changed('/player', 'org.bluez.MediaPlayer1', {
+        'Status': Variant('s', 'playing'),
+        'Track': Variant('a{sv}', {'Title': Variant('s', 'Private title')}),
+    })
     for position in range(100):
-        source.update_player('/player', {'Position': Variant('u', position)})
+        monitor.properties_changed('/player', 'org.bluez.MediaPlayer1', {'Position': Variant('u', position)})
     assert len(caplog.records) == 1
-    assert 'Variant' in caplog.text
+    assert "status='playing'" in caplog.text
     assert 'Private title' not in caplog.text
 
 

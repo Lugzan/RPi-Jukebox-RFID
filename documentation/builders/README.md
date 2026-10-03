@@ -3,6 +3,7 @@
 ## Getting started
 
 * [Installing Phoniebox future3](./installation.md)
+* [Fresh Pi 4 installation from Lugzan's phoniebox-custom branch](./installation-phoniebox-custom.md)
 * [Update](./update.md)
 * [Configuring Phoniebox](./configuration.md)
 

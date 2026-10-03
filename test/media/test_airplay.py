@@ -182,12 +182,15 @@ def test_initialization_is_opt_in(monkeypatch, enabled):
     config = MagicMock()
     config.setndefault.side_effect = lambda section, key, value: enabled if section == 'airplay_media' else False
     monitor = MagicMock()
+    player = MagicMock()
     monkeypatch.setattr(media, 'cfg', config)
     monkeypatch.setattr(media, 'media_ctrl', None)
     monkeypatch.setattr(media, 'airplay_monitor', None)
     monkeypatch.setattr(airplay, 'AirPlayMediaMonitor', monitor)
     monkeypatch.setattr(plugin, 'register', MagicMock())
+    monkeypatch.setattr(plugin, 'get', MagicMock(return_value=player))
     media.initialize()
+    player.set_media_router.assert_called_once_with(media.media_ctrl)
     config.setndefault.assert_any_call('airplay_media', 'enable', value=False)
     assert ('airplay' in media.media_ctrl.get_sources()) is enabled
     assert media.media_ctrl.get_active_source() == 'mpd'

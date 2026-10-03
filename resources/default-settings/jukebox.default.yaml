@@ -148,8 +148,8 @@ bluetooth_audio_buttons:
   # Note that volume up/down is handled independently from this by the bluetooth audio protocol
   enable: true
 bluetooth_media:
-  # Route physical media controls to a phone only while its BlueZ MediaPlayer1
-  # reports Status=playing. A connected headset alone never claims control.
+  # Claim physical controls when a BlueZ MediaPlayer1 starts playing; keep them
+  # while that session is paused. Idle phones/headsets never claim control.
   # Requires the optional dbus-next Python dependency and a running BlueZ bus.
   enable: true
 airplay_media:

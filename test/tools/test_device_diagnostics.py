@@ -40,7 +40,13 @@ def test_collect_preserves_rotated_logs_and_omits_unrelated_settings(monkeypatch
     (logs / 'app.log').write_text('current session\n')
     (logs / 'app.log.1').write_text('previous session\n')
     (logs / 'outside.log').symlink_to(settings / 'jukebox.yaml')
-    monkeypatch.setattr(diagnostics, 'run_command', lambda *args: 'command unavailable\n')
+    commands = []
+
+    def record_command(command, cwd):
+        commands.append(command)
+        return 'command unavailable\n'
+
+    monkeypatch.setattr(diagnostics, 'run_command', record_command)
     diagnostics.collect(root, output, '5 minutes ago')
     summary = json.loads((output / 'settings-summary.json').read_text())
     assert summary['jukebox']['airplay_media']['enable'] is True
@@ -52,3 +58,8 @@ def test_collect_preserves_rotated_logs_and_omits_unrelated_settings(monkeypatch
     assert not (output / 'logs' / 'outside.log').exists()
     assert (output / 'user-journal.txt').read_text() == 'command unavailable\n'
     assert (output / 'reproduction.txt').exists()
+    user_commands = [command for command in commands if '--user' in command]
+    assert {command[0] for command in user_commands} == {'systemctl', 'journalctl'}
+    for command in user_commands:
+        assert 'jukebox-daemon.service' in command
+        assert 'jukebox.service' not in command

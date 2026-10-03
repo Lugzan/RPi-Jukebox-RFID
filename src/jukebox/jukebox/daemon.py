@@ -17,6 +17,7 @@ from jukebox.NvManager import nv_manager
 
 import jukebox
 import jukebox.cfghandler
+from jukebox.configmigration import migrate_media_module
 
 logger = logging.getLogger('jb.daemon')
 cfg = jukebox.cfghandler.get_handler('jukebox')
@@ -47,6 +48,7 @@ class JukeBox:
         self._signal_cnt = 0
         self.rpc_server = None
         jukebox.cfghandler.load_yaml(cfg, configuration_file)
+        migrate_media_module(cfg)
 
         self.write_artifacts = write_artifacts
 

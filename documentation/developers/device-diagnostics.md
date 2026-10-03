@@ -26,7 +26,7 @@ Keep the `jb` file handler and propagation from these child loggers. Restart
 Jukebox once after deploying the changes/configuration:
 
 ```sh
-systemctl --user restart jukebox.service
+systemctl --user restart jukebox-daemon.service
 ```
 
 The foreground `run_jukebox.sh -vv` option uses console logging instead of the
@@ -34,10 +34,10 @@ configured file handlers, so it does not produce the same app.log bundle.
 For a custom log location, include those files separately.
 
 Look for `Media router configuration`, `Registered media source`, and `PN532 UART
-configured` at startup. On an existing installation, check that
-`shared/settings/jukebox.yaml` includes `media: media` in `modules.named`, directly
-after `player: playermpd` and before input components. Updating the default
-template alone does not update your installed settings.
+configured` at startup. Existing installations automatically insert the missing
+`media: media` entry after `player` before loading input components. The migration
+logs `media added after player` and preserves your other settings. An explicitly
+configured media mapping is retained.
 
 ## Reproduce and collect
 
@@ -95,6 +95,6 @@ AirPlay observations are not logged individually. Card IDs are not added to
 PN532 summaries; the existing `log_all_cards` setting enables per-scan IDs when
 needed, and the common RFID layer already logs recognized cards.
 
-Known problems found in the unpushed snapshot are listed in
-[the review](unpushed-review.md). Diagnostics make these visible; they do not fix
-the routing and installation findings.
+The original findings are recorded in [the review](unpushed-review.md).
+The subsequent fixes and recovery behavior are described in
+[Media routing and recovery](media-routing.md).

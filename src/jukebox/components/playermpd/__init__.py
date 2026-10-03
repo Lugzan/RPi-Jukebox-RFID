@@ -87,6 +87,7 @@ import threading
 import logging
 import time
 import functools
+from contextlib import nullcontext
 from pathlib import Path
 import components.player
 import jukebox.cfghandler
@@ -103,6 +104,17 @@ from .coverart_cache_manager import CoverartCacheManager
 
 logger = logging.getLogger('jb.PlayerMPD')
 cfg = jukebox.cfghandler.get_handler('jukebox')
+
+
+def _media_playback(*, claim=True):
+    """Acquire media routing before any nested MPD lock or playback callback."""
+    def decorate(method):
+        @functools.wraps(method)
+        def wrapped(self, *args, **kwargs):
+            with self._playback_context(claim=claim):
+                return method(self, *args, **kwargs)
+        return wrapped
+    return decorate
 
 
 class MpdLock:
@@ -143,6 +155,7 @@ class PlayerMPD:
     """Interface to MPD Music Player Daemon"""
 
     def __init__(self):
+        self._media_router = None
         self.nvm = nv_manager()
         self.mpd_host = cfg.getn('playermpd', 'host')
         self.music_player_status = self.nvm.load(cfg.getn('playermpd', 'status_file'))
@@ -329,7 +342,15 @@ class PlayerMPD:
         self._db_wait_for_update(state)
         return state
 
+    def set_media_router(self, router):
+        """Attach the optional router after the player plugin has initialized."""
+        self._media_router = router
+
+    def _playback_context(self, *, claim=True):
+        return self._media_router.local_playback(claim=claim) if self._media_router is not None else nullcontext()
+
     @plugs.tag
+    @_media_playback()
     def play(self):
         with self.mpd_lock:
             self.mpd_client.play()
@@ -346,10 +367,12 @@ class PlayerMPD:
         This is what you want as card removal action: pause the playback, so it can be resumed when card is placed
         on the reader again. What happens on re-placement depends on configured second swipe option
         """
-        with self.mpd_lock:
-            self.mpd_client.pause(state)
+        with self._playback_context(claim=not state):
+            with self.mpd_lock:
+                self.mpd_client.pause(state)
 
     @plugs.tag
+    @_media_playback()
     def prev(self):
         logger.debug("Prev")
         if self.mpd_status['state'] == 'stop':
@@ -368,6 +391,7 @@ class PlayerMPD:
             self.mpd_client.play(max(0, int(self.mpd_status['pos']) - 1))
 
     @plugs.tag
+    @_media_playback()
     def next(self):
         """Play next track in current playlist"""
         logger.debug("Next")
@@ -401,6 +425,7 @@ class PlayerMPD:
             self.mpd_client.seekcur(new_time)
 
     @plugs.tag
+    @_media_playback()
     def rewind(self):
         """
         Re-start current playlist from first track
@@ -411,6 +436,7 @@ class PlayerMPD:
             self.mpd_client.play(0)
 
     @plugs.tag
+    @_media_playback(claim=False)
     def replay(self):
         """
         Re-start playing the last-played folder
@@ -421,12 +447,14 @@ class PlayerMPD:
             self.play_folder(self.music_player_status['player_status']['last_played_folder'])
 
     @plugs.tag
+    @_media_playback()
     def toggle(self):
         """Toggle pause state, i.e. do a pause / resume depending on current state"""
         with self.mpd_lock:
             self.mpd_client.pause()
 
     @plugs.tag
+    @_media_playback(claim=False)
     def replay_if_stopped(self):
         """
         Re-start playing the last-played folder unless playlist is still playing
@@ -523,6 +551,7 @@ class PlayerMPD:
         raise NotImplementedError
 
     @plugs.tag
+    @_media_playback()
     def play_single(self, song_url):
         with self.mpd_lock:
             self.mpd_client.clear()
@@ -530,6 +559,7 @@ class PlayerMPD:
             self.mpd_client.play()
 
     @plugs.tag
+    @_media_playback()
     def resume(self):
         with self.mpd_lock:
             songpos = self.current_folder_status["CURRENTSONGPOS"]
@@ -538,6 +568,7 @@ class PlayerMPD:
             self.mpd_client.play()
 
     @plugs.tag
+    @_media_playback(claim=False)
     def play_card(self, folder: str, recursive: bool = False):
         """
         Main entry point for trigger music playing from RFID reader. Decodes second swipe options before playing folder content
@@ -612,6 +643,7 @@ class PlayerMPD:
         return plc.playlist
 
     @plugs.tag
+    @_media_playback()
     def play_folder(self, folder: str, recursive: bool = False) -> None:
         """
         Playback a music folder.
@@ -647,6 +679,7 @@ class PlayerMPD:
             self.mpd_client.play()
 
     @plugs.tag
+    @_media_playback()
     def play_album(self, albumartist: str, album: str):
         """
         Playback a album found in MPD database.
