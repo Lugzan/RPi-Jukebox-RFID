@@ -41,16 +41,16 @@ _jukebox_core_install_python_requirements() {
 
   cd "${INSTALLATION_PATH}" || exit_on_error
 
-  python3 -m venv $VIRTUAL_ENV
-  source "$VIRTUAL_ENV/bin/activate"
+  python3 -m venv "$VIRTUAL_ENV" || exit_on_error "Could not create Python virtual environment"
+  source "$VIRTUAL_ENV/bin/activate" || exit_on_error "Could not activate Python virtual environment"
 
-  pip install --upgrade pip
+  pip install --upgrade pip || exit_on_error "Could not upgrade pip"
   # Remove excluded libs, if installed - see https://github.com/MiczFlor/RPi-Jukebox-RFID/pull/2470
-  pip uninstall -y -r "${INSTALLATION_PATH}"/requirements-excluded.txt
+  pip uninstall -y -r "${INSTALLATION_PATH}"/requirements-excluded.txt || exit_on_error "Could not remove excluded Python packages"
 
   _jukebox_core_build_and_install_lg
 
-  pip install --no-cache-dir -r "${INSTALLATION_PATH}/requirements.txt"
+  pip install --no-cache-dir -r "${INSTALLATION_PATH}/requirements.txt" || exit_on_error "Could not install Python requirements"
 }
 
 _jukebox_core_configure_pulseaudio() {
@@ -65,25 +65,30 @@ _jukebox_core_build_libzmq_with_drafts() {
   local zmq_tar_filename="${zmq_filename}.tar.gz"
   local cpu_count=${CPU_COUNT:-$(python3 -c "import os; print(os.cpu_count())")}
 
+  sudo apt-get -y install --no-install-recommends build-essential pkg-config || exit_on_error "Could not install libzmq build dependencies"
   cd "${JUKEBOX_ZMQ_TMP_DIR}" || exit_on_error
-  wget --quiet https://github.com/zeromq/libzmq/releases/download/v${JUKEBOX_ZMQ_VERSION}/${zmq_tar_filename} || exit_on_error "Download failed"
-  tar -xzf ${zmq_tar_filename}
-  rm -f ${zmq_tar_filename}
-  cd ${zmq_filename} || exit_on_error
-  ./configure --prefix=${JUKEBOX_ZMQ_PREFIX} --enable-drafts --disable-Werror
-  make -j${cpu_count} && sudo make install
+  wget --quiet "https://github.com/zeromq/libzmq/releases/download/v${JUKEBOX_ZMQ_VERSION}/${zmq_tar_filename}" -O "$zmq_tar_filename" || exit_on_error "Download failed"
+  tar -xzf "$zmq_tar_filename" || exit_on_error "Could not extract libzmq sources"
+  rm -f "$zmq_tar_filename"
+  cd "$zmq_filename" || exit_on_error
+  ./configure --prefix="${JUKEBOX_ZMQ_PREFIX}" --enable-drafts --disable-Werror || exit_on_error "Could not configure libzmq"
+  make -j"${cpu_count}" || exit_on_error "Could not build libzmq"
+  sudo make install || exit_on_error "Could not install libzmq"
+  sudo ldconfig || exit_on_error "Could not update the shared-library cache"
 }
 
 _jukebox_core_download_prebuilt_libzmq_with_drafts() {
   log "    Download pre-compiled libzmq with drafts support"
   local zmq_tar_filename="libzmq.tar.gz"
-  ARCH=$(get_architecture)
+  local arch=$(get_architecture)
+  log "    libzmq architecture: kernel=$(uname -m) userspace=$(dpkg --print-architecture) asset=${arch}"
 
   cd "${JUKEBOX_ZMQ_TMP_DIR}" || exit_on_error
-  wget --quiet https://github.com/pabera/libzmq/releases/download/v${JUKEBOX_ZMQ_VERSION}/libzmq5-${ARCH}-${JUKEBOX_ZMQ_VERSION}.tar.gz -O ${zmq_tar_filename} || exit_on_error "Download failed"
-  tar -xzf ${zmq_tar_filename}
-  rm -f ${zmq_tar_filename}
-  sudo rsync -a ./* ${JUKEBOX_ZMQ_PREFIX}/
+  wget --quiet "https://github.com/pabera/libzmq/releases/download/v${JUKEBOX_ZMQ_VERSION}/libzmq5-${arch}-${JUKEBOX_ZMQ_VERSION}.tar.gz" -O "$zmq_tar_filename" || exit_on_error "Download failed"
+  tar -xzf "$zmq_tar_filename" || exit_on_error "Could not extract libzmq binaries"
+  rm -f "$zmq_tar_filename"
+  sudo rsync -a ./* "${JUKEBOX_ZMQ_PREFIX}/" || exit_on_error "Could not install libzmq binaries"
+  sudo ldconfig || exit_on_error "Could not update the shared-library cache"
 }
 
 _jukebox_core_build_and_install_pyzmq() {
@@ -106,7 +111,7 @@ _jukebox_core_build_and_install_pyzmq() {
     fi
 
     ZMQ_PREFIX="${JUKEBOX_ZMQ_PREFIX}" ZMQ_DRAFT_API=1 \
-      pip install -v 'pyzmq<26' --no-binary pyzmq
+      pip install -v 'pyzmq<26' --no-binary pyzmq || exit_on_error "Could not build pyzmq against ${JUKEBOX_ZMQ_PREFIX}/lib/libzmq (kernel=$(uname -m), userspace=$(dpkg --print-architecture))"
   else
     print_lc "    Skipping. pyzmq already installed"
   fi

@@ -61,18 +61,32 @@ run_with_log_frame() {
 }
 
 get_architecture() {
-    local arch=""
-    if [ "$(uname -m)" = "armv7l" ]; then
-        arch="armv7"
-    elif [ "$(uname -m)" = "armv6l" ]; then
-        arch="armv6"
-    elif [ "$(uname -m)" = "aarch64" ]; then
-        arch="arm64"
-    else
-        arch="$(uname -m)"
-    fi
+    local kernel_arch=$(uname -m)
+    local package_arch
+    package_arch=$(dpkg --print-architecture 2>/dev/null) || package_arch=""
 
-    echo $arch
+    # Pi OS 32-bit can boot a 64-bit kernel. Libraries must match user space,
+    # not uname. Keep the ARMv6 distinction for the original Pi and Zero.
+    case "$package_arch" in
+        armhf)
+            if [[ "$kernel_arch" == armv6l ]]; then
+                echo armv6
+            else
+                echo armv7
+            fi
+            ;;
+        arm64) echo arm64 ;;
+        amd64) echo x86_64 ;;
+        i386) echo i386 ;;
+        *)
+            case "$kernel_arch" in
+                armv7l) echo armv7 ;;
+                armv6l) echo armv6 ;;
+                aarch64) echo arm64 ;;
+                *) echo "$kernel_arch" ;;
+            esac
+            ;;
+    esac
 }
 
 is_debian_based() {
