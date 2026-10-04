@@ -148,5 +148,5 @@ cd "${INSTALLATION_PATH}" || exit_on_error "ERROR: Changing to install dir faile
 _load_sources
 
 welcome
-run_with_timer install
+run_with_timer install_jukebox
 finish

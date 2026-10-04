@@ -61,9 +61,19 @@ Package versions come from the Python environment used to run the collector.
 Logs retain existing card IDs, device addresses, names and media information;
 review the archive before sharing it. Raw settings, card assignments, environment
 variables and credentials are not deliberately collected. The settings summary
-includes reader paths, GPIO pin parameters and action names, module loading, and
-logging levels. It omits arbitrary RPC arguments. Restricted system journals may
+includes reader paths, GPIO pin parameters and action names, module loading,
+audio output names and volume limits, automatic output switching, and logging
+levels. It omits arbitrary RPC arguments. Restricted system journals may
 be missing; their report files explain why.
+
+For Bluetooth volume failures, collect while the sender is still connected and
+attempting playback. The detailed PulseAudio reports include sink/source volume
+and mute state, card profiles, and playback/capture streams. These help separate
+speaker-volume changes from changes to the incoming Bluetooth stream. They may
+also include connected device names and media titles. The reports are snapshots;
+correlate them with `GPIO action triggered` and volume commands in `app.log` to
+identify repeated button actions during a reported drop. Record whether volume
+changes on the sender, in the web UI, or only audibly.
 
 Send the archive with:
 

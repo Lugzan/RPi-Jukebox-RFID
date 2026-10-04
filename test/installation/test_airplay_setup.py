@@ -203,6 +203,55 @@ _airplay_preflight
     assert 'enable: false' in (tmp_path / 'jukebox.yaml').read_text()
 
 
+def test_main_install_routine_does_not_shadow_system_install():
+    result = shell('''
+source installation/routines/install.sh
+[[ $(type -t install) == file ]] || exit 9
+declare -F install_jukebox
+''')
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize('shadow_install', [False, True])
+def test_airplay_configuration_copies_service_without_reentering_installer(tmp_path, shadow_install):
+    venv = tmp_path / 'venv'
+    (venv / 'bin').mkdir(parents=True)
+    python = venv / 'bin/python'
+    python.write_text('#!/bin/bash\nprintf "generated policy\\n"\n')
+    python.chmod(0o755)
+    policy = tmp_path / 'dbus-policy.conf'
+    config = tmp_path / 'receiver.conf'
+    home = tmp_path / 'home'
+    result = shell('''
+source installation/routines/install.sh
+source installation/routines/setup_airplay.sh
+AIRPLAY_POLICY="$TEST_POLICY"
+AIRPLAY_CONFIG="$TEST_CONFIG"
+if [[ "$SHADOW_INSTALL" == true ]]; then
+    install() { echo UNEXPECTED_INSTALLER_REENTRY; return 97; }
+fi
+sudo() {
+    case "$1" in
+        install) command "$@" ;;
+        systemctl|loginctl) echo "sudo $*" ;;
+        *) return 99 ;;
+    esac
+}
+systemctl() { echo "systemctl $*"; }
+_airplay_configure
+''', TEST_POLICY=policy, TEST_CONFIG=config, VIRTUAL_ENV=venv,
+                   HOME_PATH=home, INSTALLATION_PATH=ROOT, CURRENT_USER='jukebox',
+                   SHADOW_INSTALL=str(shadow_install).lower())
+    assert result.returncode == 0, result.stderr
+    assert 'UNEXPECTED_INSTALLER_REENTRY' not in result.stdout
+    assert policy.read_text() == 'generated policy\n'
+    assert config.read_bytes() == (ROOT / 'resources/default-settings/shairport-sync.conf').read_bytes()
+    unit = home / '.config/systemd/user/phoniebox-airplay.service'
+    assert unit.read_bytes() == (ROOT / 'resources/default-services/phoniebox-airplay.service').read_bytes()
+    assert unit.stat().st_mode & 0o777 == 0o644
+    assert 'systemctl --user daemon-reload' in result.stdout
+
+
 def test_build_verifies_archive_and_installs_only_private_binary(tmp_path):
     import hashlib
     import tarfile

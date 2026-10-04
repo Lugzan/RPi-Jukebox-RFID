@@ -4,6 +4,7 @@ import sys
 import os
 import time
 
+import pytest
 from gpiozero import Device
 from gpiozero.pins.mock import MockFactory, MockPin
 
@@ -389,6 +390,90 @@ def test_press_long_ab_w_repeat():
         release(btn._pin_b)
     assert_cnt(inc, 0, 0, 0, 0, 0, 1)
     assert btn._state == TwinButton.StateVar.IDLE
+
+
+@pytest.mark.parametrize('pull_up', [False, True])
+@pytest.mark.parametrize('side', ['a', 'b'])
+@pytest.mark.parametrize('already_held', [False, True])
+def test_missed_release_does_not_repeat_action_for_inactive_pin(caplog, pull_up, side, already_held):
+    actions = []
+    factory = MockFactory(pin_class=MockPin)
+    with TwinButton(5, 6, pull_up=pull_up, hold_time=60, hold_repeat=True,
+                    pin_factory=factory, name='Volume') as btn:
+        setattr(btn, f'on_long_press_{side}', lambda: actions.append('held'))
+        setattr(btn, f'on_short_press_{side}', lambda: actions.append('short'))
+        button = getattr(btn, f'_pin_{side}')
+        activate = button.pin.drive_low if pull_up else button.pin.drive_high
+        release_pin = button.pin.drive_high if pull_up else button.pin.drive_low
+        activate()
+        if already_held:
+            button.when_held()
+        expected = actions.copy()
+
+        # Lose just the release notification. GPIOZero's hold thread still
+        # considers the button active, while reading the physical pin says no.
+        notify = button.pin.when_changed
+        button.pin.when_changed = None
+        release_pin()
+        assert not button.is_active
+        assert not button.wait_for_inactive(timeout=0)
+        for _ in range(5):
+            button.when_held()
+        assert actions == expected
+        assert btn._state == TwinButton.StateVar.IDLE
+        warnings = [record for record in caplog.records if 'Ignoring stale GPIO hold' in record.message]
+        assert len(warnings) == 1
+        assert 'device=Volume' in warnings[0].message
+        assert 'a_active=False b_active=False' in warnings[0].message
+
+        # Deliver the delayed release and verify that subsequent presses work.
+        button.pin.when_changed = notify
+        button._pin_changed(factory.ticks(), button.pin.state)
+        activate()
+        release_pin()
+        assert actions == expected + ['short']
+        activate()
+        button.when_held()
+        button.when_held()
+        release_pin()
+        assert actions == expected + ['short', 'held', 'held']
+
+
+@pytest.mark.parametrize('stale_side,live_side', [('a', 'b'), ('b', 'a')])
+def test_stale_hold_does_not_cancel_other_button(stale_side, live_side, caplog):
+    actions = []
+    factory = MockFactory(pin_class=MockPin)
+    with TwinButton(5, 6, pull_up=False, hold_time=60, hold_repeat=True,
+                    pin_factory=factory, name='Volume') as btn:
+        setattr(btn, f'on_long_press_{stale_side}', lambda: actions.append('unexpected'))
+        setattr(btn, f'on_short_press_{live_side}', lambda: actions.append('short'))
+        setattr(btn, f'on_long_press_{live_side}', lambda: actions.append('held'))
+        stale = getattr(btn, f'_pin_{stale_side}')
+        live = getattr(btn, f'_pin_{live_side}')
+        notify = stale.pin.when_changed
+        stale.pin.drive_high()
+        stale.pin.when_changed = None
+        stale.pin.drive_low()
+        try:
+            stale.when_held()
+
+            live.pin.drive_high()
+            stale.when_held()
+            live.pin.drive_low()
+            assert actions == ['short']
+            live.pin.drive_high()
+            for _ in range(3):
+                stale.when_held()
+                live.when_held()
+            live.pin.drive_low()
+            assert actions == ['short', 'held', 'held', 'held']
+            assert btn._state == TwinButton.StateVar.IDLE
+            warnings = [record for record in caplog.records if 'Ignoring stale GPIO hold' in record.message]
+            assert len(warnings) == 1
+        finally:
+            stale.pin.when_changed = notify
+            stale._pin_changed(factory.ticks(), stale.pin.state)
+            live.pin.drive_low()
 
 
 if __name__ == '__main__':

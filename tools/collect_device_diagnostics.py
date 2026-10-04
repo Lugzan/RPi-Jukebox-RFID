@@ -39,6 +39,16 @@ def selected_settings(root):
                 result[name] = {'modules': settings.get('modules')}
                 for section in ('bluetooth_media', 'airplay_media', 'bluetooth_audio_buttons', 'gpioz'):
                     result[name][section] = {'enable': settings.get(section, {}).get('enable')}
+                pulse = settings.get('pulse') or {}
+                result[name]['pulse'] = {
+                    field: pulse.get(field)
+                    for field in ('startup_volume', 'toggle_on_connect', 'soft_max_volume')
+                }
+                result[name]['pulse']['outputs'] = {
+                    output: {field: values.get(field)
+                             for field in ('alias', 'pulse_sink_name', 'volume_limit', 'soft_max_volume')}
+                    for output, values in (pulse.get('outputs') or {}).items()
+                }
             elif name == 'rfid':
                 readers = settings.get('rfid', {}).get('readers', {})
                 result[name] = {
@@ -91,6 +101,11 @@ def collect(root, destination, since):
         'serial-devices': ['ls', '-l', '/dev/serial/by-id'],
         'audio-server': ['pactl', 'info'],
         'audio-sinks': ['pactl', 'list', 'short', 'sinks'],
+        'audio-sink-details': ['pactl', 'list', 'sinks'],
+        'audio-sources': ['pactl', 'list', 'sources'],
+        'audio-cards': ['pactl', 'list', 'cards'],
+        'audio-playback-streams': ['pactl', 'list', 'sink-inputs'],
+        'audio-capture-streams': ['pactl', 'list', 'source-outputs'],
         'mpd': ['mpc', 'status'],
         'user-services': ['systemctl', '--user', '--no-pager', '--full', 'status',
                           'jukebox-daemon.service', 'mpd.service', 'pulseaudio.service', 'phoniebox-airplay.service'],

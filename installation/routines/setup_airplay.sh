@@ -74,7 +74,7 @@ _airplay_configure() {
     sudo install -m 644 "${INSTALLATION_PATH}/resources/default-settings/shairport-sync.conf" \
         "$AIRPLAY_CONFIG" || return 1
     mkdir -p "${HOME_PATH}/.config/systemd/user" || return 1
-    install -m 644 "${INSTALLATION_PATH}/resources/default-services/phoniebox-airplay.service" \
+    command install -m 644 "${INSTALLATION_PATH}/resources/default-services/phoniebox-airplay.service" \
         "${HOME_PATH}/.config/systemd/user/${AIRPLAY_SERVICE}" || return 1
     # Reload policy without restarting the system bus (or disrupting Bluetooth).
     sudo systemctl reload dbus || return 1

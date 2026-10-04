@@ -1,4 +1,4 @@
-install() {
+install_jukebox() {
   clear_c
   customize_options
   clear_c

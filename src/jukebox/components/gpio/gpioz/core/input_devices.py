@@ -493,12 +493,6 @@ class TwinButton(NameMixin):
         self._pin_a.hold_repeat = hold_repeat
         self._pin_b.hold_repeat = hold_repeat
         self._state = TwinButton.StateVar.IDLE
-        self._pin_a.when_activated = functools.partial(self._change_state, edge_a=1, edge_b=0, hold_a=0, hold_b=0)
-        self._pin_b.when_activated = functools.partial(self._change_state, edge_a=0, edge_b=1, hold_a=0, hold_b=0)
-        self._pin_a.when_deactivated = functools.partial(self._change_state, edge_a=0, edge_b=0, hold_a=0, hold_b=0)
-        self._pin_b.when_deactivated = functools.partial(self._change_state, edge_a=0, edge_b=0, hold_a=0, hold_b=0)
-        self._pin_a.when_held = functools.partial(self._change_state, edge_a=0, edge_b=0, hold_a=1, hold_b=0)
-        self._pin_b.when_held = functools.partial(self._change_state, edge_a=0, edge_b=0, hold_a=0, hold_b=1)
         self._on_short_press_a = None
         self._on_short_press_b = None
         self._on_short_press_ab = None
@@ -507,6 +501,14 @@ class TwinButton(NameMixin):
         self.on_long_press_ab = None
         self._warn_on_no_func = False
         self._state_lock = threading.Lock()
+        self._stale_holds = set()
+        # All state must be ready before a pin callback can enter _change_state.
+        self._pin_a.when_activated = functools.partial(self._change_state, edge_a=1, edge_b=0, hold_a=0, hold_b=0)
+        self._pin_b.when_activated = functools.partial(self._change_state, edge_a=0, edge_b=1, hold_a=0, hold_b=0)
+        self._pin_a.when_deactivated = functools.partial(self._change_state, edge_a=0, edge_b=0, hold_a=0, hold_b=0)
+        self._pin_b.when_deactivated = functools.partial(self._change_state, edge_a=0, edge_b=0, hold_a=0, hold_b=0)
+        self._pin_a.when_held = functools.partial(self._change_state, edge_a=0, edge_b=0, hold_a=1, hold_b=0)
+        self._pin_b.when_held = functools.partial(self._change_state, edge_a=0, edge_b=0, hold_a=0, hold_b=1)
 
     def __enter__(self):
         return self
@@ -527,6 +529,34 @@ class TwinButton(NameMixin):
         # For the state change logic this means, when hold_X is 1 do not rely on edge_X
         # which is simply implemented, by prioritization of held_X over any edge_X in if-else logic
         with self._state_lock:
+            if hold_a or hold_b:
+                # GPIOZero repeats holds using its last edge notification. A
+                # missed/delayed release can leave that notification active even
+                # though a fresh read of the pin says the button is released.
+                # Never execute a hold action based on that stale notification.
+                a_active = self._pin_a.is_active
+                b_active = self._pin_b.is_active
+                if (hold_a and not a_active) or (hold_b and not b_active):
+                    held_button = 'a' if hold_a else 'b'
+                    if held_button not in self._stale_holds:
+                        logger.warning(
+                            "Ignoring stale GPIO hold: device=%s hold_a=%s hold_b=%s state=%s "
+                            "a_active=%s b_active=%s",
+                            self._name, hold_a, hold_b, self._state.name, a_active, b_active)
+                    self._stale_holds.add(held_button)
+                    if not a_active and not b_active:
+                        self._state = TwinButton.StateVar.IDLE
+                    elif ((not a_active and self._state in (TwinButton.StateVar.HOLD_A, TwinButton.StateVar.CONT_A))
+                          or (not b_active and self._state in (TwinButton.StateVar.HOLD_B, TwinButton.StateVar.CONT_B))
+                          or self._state in (TwinButton.StateVar.CONT_AB_WAIT_A, TwinButton.StateVar.CONT_AB_WAIT_B)):
+                        self._state = TwinButton.StateVar.WAIT4RELEASE
+                    # A stale A hold must not cancel a genuine B press (or vice
+                    # versa) while GPIOZero is still awaiting the lost release.
+                    return
+            if edge_a or hold_a:
+                self._stale_holds.discard('a')
+            if edge_b or hold_b:
+                self._stale_holds.discard('b')
             # print(f"{TwinButton.StateVar(self._state)} : {edge_a}, {edge_b}, {hold_a}, {hold_b}")
             if self._state == TwinButton.StateVar.IDLE:
                 if edge_a == 1:

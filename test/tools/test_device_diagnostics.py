@@ -30,6 +30,9 @@ def test_collect_preserves_rotated_logs_and_omits_unrelated_settings(monkeypatch
     output.mkdir()
     (settings / 'jukebox.yaml').write_text(
         'modules: {named: {media: media}}\nairplay_media: {enable: true}\n'
+        'pulse:\n  toggle_on_connect: false\n  soft_max_volume: 70\n  password: SECRET\n'
+        '  outputs:\n    primary:\n      pulse_sink_name: alsa_output.test\n'
+        '      volume_limit: 80\n      password: SECRET\n'
         'wifi: {password: SECRET}\n')
     (settings / 'rfid.yaml').write_text(
         'rfid:\n  readers:\n    read_00:\n      module: pn532_uart\n'
@@ -50,6 +53,10 @@ def test_collect_preserves_rotated_logs_and_omits_unrelated_settings(monkeypatch
     diagnostics.collect(root, output, '5 minutes ago')
     summary = json.loads((output / 'settings-summary.json').read_text())
     assert summary['jukebox']['airplay_media']['enable'] is True
+    assert summary['jukebox']['pulse']['toggle_on_connect'] is False
+    assert summary['jukebox']['pulse']['soft_max_volume'] == 70
+    assert summary['jukebox']['pulse']['outputs']['primary']['pulse_sink_name'] == 'alsa_output.test'
+    assert summary['jukebox']['pulse']['outputs']['primary']['volume_limit'] == 80
     assert summary['rfid']['read_00']['config']['device'] == '/dev/ttyUSB0'
     assert summary['gpio']['PlayPause']['kwargs']['pin'] == 10
     assert summary['gpio']['PlayPause']['actions'] == ['on_press']
@@ -58,6 +65,10 @@ def test_collect_preserves_rotated_logs_and_omits_unrelated_settings(monkeypatch
     assert not (output / 'logs' / 'outside.log').exists()
     assert (output / 'user-journal.txt').read_text() == 'command unavailable\n'
     assert (output / 'reproduction.txt').exists()
+    for report in ('sink-details', 'sources', 'cards', 'playback-streams', 'capture-streams'):
+        assert (output / f'audio-{report}.txt').read_text() == 'command unavailable\n'
+    for object_type in ('sinks', 'sources', 'cards', 'sink-inputs', 'source-outputs'):
+        assert ['pactl', 'list', object_type] in commands
     user_commands = [command for command in commands if '--user' in command]
     assert {command[0] for command in user_commands} == {'systemctl', 'journalctl'}
     for command in user_commands:
